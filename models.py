@@ -165,8 +165,11 @@ class DiT(nn.Module):
                 if m.bias is not None:
                     nn.init.zeros_(m.bias)
             elif isinstance(m, nn.LayerNorm):
-                nn.init.ones_(m.weight)
-                nn.init.zeros_(m.bias)
+                # 只初始化存在的参数
+                if m.weight is not None:
+                    nn.init.ones_(m.weight)
+                if m.bias is not None:
+                    nn.init.zeros_(m.bias)
             elif isinstance(m, nn.Conv2d):
                 nn.init.trunc_normal_(m.weight, std=0.02)
                 if m.bias is not None:
@@ -201,9 +204,9 @@ class DiT(nn.Module):
 class MedicalDiT(nn.Module):
     def __init__(
             self,
-            input_size=224,
+            input_size=256,  # 修改为256
             patch_size=16,
-            in_channels=1,  # 医学图像通常为单通道
+            in_channels=4,  # 修改为4
             hidden_size=768,
             depth=12,
             num_heads=12,

@@ -7,7 +7,7 @@ import os
 import time
 from tqdm import tqdm
 from models import MedicalDiT
-from datasets import get_dataloader
+from dataloader import get_dataloader
 from torch.optim.lr_scheduler import CosineAnnealingLR
 
 
@@ -200,9 +200,9 @@ def main():
     parser = argparse.ArgumentParser(description='Medical Image Anomaly Detection with DiT')
 
     # 模型参数
-    parser.add_argument('--image_size', type=int, default=224, help='Input image size')
+    parser.add_argument('--image_size', type=int, default=256, help='Input image size')
     parser.add_argument('--patch_size', type=int, default=16, help='Patch size for DiT')
-    parser.add_argument('--in_channels', type=int, default=1, help='Number of input channels')
+    parser.add_argument('--in_channels', type=int, default=4, help='Number of input channels')
     parser.add_argument('--hidden_size', type=int, default=768, help='Hidden size for DiT')
     parser.add_argument('--depth', type=int, default=12, help='Number of transformer blocks')
     parser.add_argument('--num_heads', type=int, default=12, help='Number of attention heads')

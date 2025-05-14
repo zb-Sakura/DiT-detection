@@ -12,11 +12,9 @@ from torch.optim.lr_scheduler import CosineAnnealingLR
 
 
 def train(args):
-    # 创建保存模型的目录
-    os.makedirs(args.save_dir, exist_ok=True)
-
-    # 设备配置
+    # 设置设备
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    print(f"使用设备: {device}")
 
     # 创建模型
     model = MedicalDiT(
@@ -28,53 +26,41 @@ def train(args):
         num_heads=args.num_heads,
         mlp_ratio=args.mlp_ratio,
         num_classes=args.num_classes,
-        dropout_prob=args.dropout_prob
-    ).to(device)
-
-    # 如果使用多GPU
-    if torch.cuda.device_count() > 1:
-        model = nn.DataParallel(model)
+        dropout_prob=args.dropout_prob,
+    )
+    model.to(device)
 
     # 定义损失函数
     reconstruction_loss_fn = nn.MSELoss()
     anomaly_loss_fn = nn.BCELoss()
+    optimizer = optim.AdamW(model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
 
-    # 定义优化器
-    optimizer = optim.AdamW(
-        model.parameters(),
-        lr=args.lr,
-        weight_decay=args.weight_decay
-    )
-
-    # 学习率调度器
-    scheduler = CosineAnnealingLR(optimizer, T_max=args.epochs)
-
-    # 获取数据加载器
+    # 创建数据加载器
     train_loader = get_dataloader(
-        args.data_dir,
+        data_dir=args.data_dir,
         image_size=args.image_size,
         batch_size=args.batch_size,
         mode='train'
     )
 
     val_loader = get_dataloader(
-        args.data_dir,
+        data_dir=args.data_dir,
         image_size=args.image_size,
         batch_size=args.batch_size,
-        mode='val'
+        mode='validation'
     )
+
+    # 创建保存目录
+    os.makedirs(args.save_dir, exist_ok=True)
 
     # 训练循环
     best_val_loss = float('inf')
-
     for epoch in range(args.epochs):
         # 训练阶段
         model.train()
         train_loss = 0.0
-        train_recon_loss = 0.0
-        train_anomaly_loss = 0.0
-
         progress_bar = tqdm(enumerate(train_loader), total=len(train_loader))
+
         for i, batch in progress_bar:
             # 获取数据并移至设备
             images = batch['image'].to(device)
@@ -88,15 +74,16 @@ def train(args):
             optimizer.zero_grad()
             x_healthy, anomaly_map = model(images, t, target_labels)
 
-            # 计算损失
+            # 计算重构损失
             recon_loss = reconstruction_loss_fn(x_healthy, images)
 
-            # 为病变图像创建二值异常图（1表示异常，0表示正常）
+            # 创建异常目标
             anomaly_target = torch.zeros_like(anomaly_map)
             for j in range(images.shape[0]):
                 if labels[j] == 1:  # 病变图像
                     anomaly_target[j] = 1.0
 
+            # 计算异常损失
             anomaly_loss = anomaly_loss_fn(anomaly_map, anomaly_target)
 
             # 总损失
@@ -106,93 +93,54 @@ def train(args):
             loss.backward()
             optimizer.step()
 
-            # 记录损失
             train_loss += loss.item()
-            train_recon_loss += recon_loss.item()
-            train_anomaly_loss += anomaly_loss.item()
+            progress_bar.set_description(f"Epoch {epoch + 1}/{args.epochs}, Loss: {loss.item():.4f}")
 
-            # 更新进度条
-            progress_bar.set_description(
-                f"Epoch [{epoch + 1}/{args.epochs}] "
-                f"Loss: {loss.item():.4f} "
-                f"Recon: {recon_loss.item():.4f} "
-                f"Anomaly: {anomaly_loss.item():.4f}"
-            )
-
-        # 计算平均损失
-        train_loss /= len(train_loader)
-        train_recon_loss /= len(train_loader)
-        train_anomaly_loss /= len(train_loader)
+        # 计算平均训练损失
+        avg_train_loss = train_loss / len(train_loader)
+        print(f"Epoch {epoch + 1}/{args.epochs}, 平均训练损失: {avg_train_loss:.4f}")
 
         # 验证阶段
         model.eval()
         val_loss = 0.0
-
         with torch.no_grad():
             for batch in val_loader:
                 images = batch['image'].to(device)
                 labels = batch['label'].to(device)
                 target_labels = batch['target_label'].to(device)
-
-                # 随机采样时间步
                 t = torch.randint(0, args.num_timesteps, (images.shape[0],), device=device)
 
-                # 前向传播
                 x_healthy, anomaly_map = model(images, t, target_labels)
-
-                # 计算损失
                 recon_loss = reconstruction_loss_fn(x_healthy, images)
 
-                # 为病变图像创建二值异常图
                 anomaly_target = torch.zeros_like(anomaly_map)
                 for j in range(images.shape[0]):
-                    if labels[j] == 1:  # 病变图像
+                    if labels[j] == 1:
                         anomaly_target[j] = 1.0
 
                 anomaly_loss = anomaly_loss_fn(anomaly_map, anomaly_target)
-
-                # 总损失
                 loss = recon_loss + args.anomaly_weight * anomaly_loss
 
                 val_loss += loss.item()
 
         # 计算平均验证损失
-        val_loss /= len(val_loader)
+        avg_val_loss = val_loss / len(val_loader)
+        print(f"Epoch {epoch + 1}/{args.epochs}, 平均验证损失: {avg_val_loss:.4f}")
 
-        # 学习率调整
-        scheduler.step()
-
-        # 打印训练信息
-        print(f"Epoch [{epoch + 1}/{args.epochs}] "
-              f"Train Loss: {train_loss:.4f} "
-              f"Recon Loss: {train_recon_loss:.4f} "
-              f"Anomaly Loss: {train_anomaly_loss:.4f} "
-              f"Val Loss: {val_loss:.4f} "
-              f"LR: {optimizer.param_groups[0]['lr']:.6f}")
-
-        # 保存模型
-        if val_loss < best_val_loss:
-            best_val_loss = val_loss
-            model_path = os.path.join(args.save_dir, f'model_best.pth')
-            torch.save({
-                'epoch': epoch,
-                'model_state_dict': model.state_dict(),
-                'optimizer_state_dict': optimizer.state_dict(),
-                'val_loss': val_loss,
-            }, model_path)
-            print(f"Saved best model at epoch {epoch + 1} with val loss: {val_loss:.4f}")
+        # 保存最佳模型
+        if avg_val_loss < best_val_loss:
+            best_val_loss = avg_val_loss
+            torch.save(model.state_dict(), os.path.join(args.save_dir, 'best_model.pth'))
+            print(f"保存最佳模型到 {os.path.join(args.save_dir, 'best_model.pth')}")
 
         # 定期保存模型
         if (epoch + 1) % args.save_interval == 0:
-            model_path = os.path.join(args.save_dir, f'model_epoch_{epoch + 1}.pth')
-            torch.save({
-                'epoch': epoch,
-                'model_state_dict': model.state_dict(),
-                'optimizer_state_dict': optimizer.state_dict(),
-                'val_loss': val_loss,
-            }, model_path)
-            print(f"Saved model at epoch {epoch + 1}")
+            torch.save(model.state_dict(), os.path.join(args.save_dir, f'model_epoch_{epoch + 1}.pth'))
+            print(f"保存模型到 {os.path.join(args.save_dir, f'model_epoch_{epoch + 1}.pth')}")
 
+    # 保存最终模型
+    torch.save(model.state_dict(), os.path.join(args.save_dir, 'final_model.pth'))
+    print(f"保存最终模型到 {os.path.join(args.save_dir, 'final_model.pth')}")
 
 def main():
     import argparse

@@ -16,31 +16,33 @@ class BRATS2020Dataset(Dataset):
         self.image_paths = []
         self.labels = []
 
-        # 检查data_dir是否已经是训练或验证目录
-        if mode == 'train' and os.path.basename(data_dir) == 'train':
-            train_dir = data_dir
-        elif mode == 'validation' and os.path.basename(data_dir) == 'validation':
-            train_dir = data_dir
+        # 严格区分训练集和验证集
+        if mode == 'train':
+            train_dir = os.path.join(data_dir, 'train')
+            if not os.path.exists(train_dir):
+                raise ValueError(f"训练目录不存在: {train_dir}")
+            subject_dirs = os.listdir(train_dir)
+            base_path = train_dir
+        elif mode == 'validation':
+            val_dir = os.path.join(data_dir, 'validation')
+            if not os.path.exists(val_dir):
+                raise ValueError(f"验证目录不存在: {val_dir}")
+            subject_dirs = os.listdir(val_dir)
+            base_path = val_dir
         else:
-            # 否则在data_dir下查找子目录
-            sub_dir = 'train' if mode == 'train' else 'validation'
-            train_dir = os.path.join(data_dir, sub_dir)
+            raise ValueError(f"不支持的模式: {mode}")
 
-        if not os.path.exists(train_dir):
-            raise ValueError(f"目录不存在: {train_dir}")
-
-        subject_dirs = os.listdir(train_dir)
         print(f"找到 {len(subject_dirs)} 个主题目录")
 
         valid_subjects = 0
         for subject_dir in subject_dirs:
-            subject_path = os.path.join(train_dir, subject_dir)
+            subject_path = os.path.join(base_path, subject_dir)
             if not os.path.isdir(subject_path):
                 continue
 
             print(f"处理主题目录: {subject_path}")
 
-            # 检查所有必要的文件是否存在 (使用.nii扩展名)
+            # 检查所有必要的文件是否存在
             required_files = {
                 'seg': f'{subject_dir}_seg.nii',
                 't1': f'{subject_dir}_t1.nii',
@@ -58,7 +60,6 @@ class BRATS2020Dataset(Dataset):
                 print(f"警告: 主题 {subject_dir} 缺少以下文件: {missing_files}")
                 continue
 
-            # 所有必要文件都存在，处理该主题
             valid_subjects += 1
 
             # 加载标签
@@ -91,16 +92,14 @@ class BRATS2020Dataset(Dataset):
                     t1ce = nib.load(t1ce_path).get_fdata()[:, :, slice_idx]
                 except Exception as e:
                     print(f"无法加载图像切片 {subject_dir} 索引 {slice_idx}: {e}")
-                    # 如果加载某个模态失败，跳过当前切片
                     if self.labels:
-                        self.labels.pop()  # 移除最后添加的标签
+                        self.labels.pop()
                     continue
 
-                # 确保所有模态都有相同的尺寸
                 if t1.shape != t2.shape or t1.shape != flair.shape or t1.shape != t1ce.shape:
                     print(f"警告: 主题 {subject_dir} 切片 {slice_idx} 的模态尺寸不一致")
                     if self.labels:
-                        self.labels.pop()  # 移除最后添加的标签
+                        self.labels.pop()
                     continue
 
                 image = np.stack([t1, t2, flair, t1ce], axis=0)
@@ -109,14 +108,14 @@ class BRATS2020Dataset(Dataset):
 
             if valid_slices == 0:
                 print(f"警告: 主题 {subject_dir} 没有有效切片")
-                valid_subjects -= 1  # 不计入有效主题
+                valid_subjects -= 1
 
         print(f"成功加载 {valid_subjects} 个主题，共 {len(self.image_paths)} 个样本")
 
         # 定义图像变换
         self.transform = transforms.Compose([
             transforms.ToTensor(),
-            transforms.Normalize(mean=[0.5] * 4, std=[0.5] * 4)  # 四个通道
+            transforms.Normalize(mean=[0.5] * 4, std=[0.5] * 4)
         ])
 
         # 数据增强（仅用于训练集）

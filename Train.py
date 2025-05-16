@@ -142,10 +142,82 @@ def train(args):
     torch.save(model.state_dict(), os.path.join(args.save_dir, 'final_model.pth'))
     print(f"保存最终模型到 {os.path.join(args.save_dir, 'final_model.pth')}")
 
+
+def test(args):
+    # 设置设备
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    print(f"使用设备: {device}")
+
+    # 创建模型
+    model = MedicalDiT(
+        input_size=args.image_size,
+        patch_size=args.patch_size,
+        in_channels=args.in_channels,
+        hidden_size=args.hidden_size,
+        depth=args.depth,
+        num_heads=args.num_heads,
+        mlp_ratio=args.mlp_ratio,
+        num_classes=args.num_classes,
+        dropout_prob=args.dropout_prob,
+    )
+    model.to(device)
+
+    # 加载最佳模型
+    model_path = os.path.join(args.save_dir, 'best_model.pth')
+    if os.path.exists(model_path):
+        model.load_state_dict(torch.load(model_path))
+        print(f"加载最佳模型: {model_path}")
+    else:
+        print(f"未找到最佳模型: {model_path}")
+        return
+
+    # 定义损失函数
+    reconstruction_loss_fn = nn.MSELoss()
+    anomaly_loss_fn = nn.BCELoss()
+
+    # 创建测试数据加载器
+    test_loader = get_dataloader(
+        data_dir=args.data_dir,
+        image_size=args.image_size,
+        batch_size=args.batch_size,
+        mode='validation'  # 假设验证集作为测试集
+    )
+
+    # 测试阶段
+    model.eval()
+    test_loss = 0.0
+    with torch.no_grad():
+        for batch in test_loader:
+            images = batch['image'].to(device)
+            labels = batch['label'].to(device)
+            target_labels = batch['target_label'].to(device)
+            t = torch.randint(0, args.num_timesteps, (images.shape[0],), device=device)
+
+            x_healthy, anomaly_map = model(images, t, target_labels)
+            recon_loss = reconstruction_loss_fn(x_healthy, images)
+
+            anomaly_target = torch.zeros_like(anomaly_map)
+            for j in range(images.shape[0]):
+                if labels[j] == 1:
+                    anomaly_target[j] = 1.0
+
+            anomaly_loss = anomaly_loss_fn(anomaly_map, anomaly_target)
+            loss = recon_loss + args.anomaly_weight * anomaly_loss
+
+            test_loss += loss.item()
+
+    # 计算平均测试损失
+    avg_test_loss = test_loss / len(test_loader)
+    print(f"平均测试损失: {avg_test_loss:.4f}")
+
+
 def main():
     import argparse
 
     parser = argparse.ArgumentParser(description='Medical Image Anomaly Detection with DiT')
+
+    # 模式参数
+    parser.add_argument('--mode', type=str, default='train', choices=['train', 'test'], help='Training or testing mode')
 
     # 模型参数
     parser.add_argument('--image_size', type=int, default=256, help='Input image size')
@@ -173,7 +245,10 @@ def main():
 
     args = parser.parse_args()
 
-    train(args)
+    if args.mode == 'train':
+        train(args)
+    elif args.mode == 'test':
+        test(args)
 
 
 if __name__ == '__main__':

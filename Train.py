@@ -43,12 +43,18 @@ def train(args):
         mode='train'
     )
 
-    val_loader = get_dataloader(
-        data_dir=args.data_dir,
-        image_size=args.image_size,
-        batch_size=args.batch_size,
-        mode='validation'
-    )
+    val_loader = None
+    if args.do_validation:
+        try:
+            val_loader = get_dataloader(
+                data_dir=args.data_dir,
+                image_size=args.image_size,
+                batch_size=args.batch_size,
+                mode='validation'
+            )
+        except Exception as e:
+            print(f"警告: 验证集加载失败 - {e}")
+            args.do_validation = False  # 若加载失败，自动关闭验证
 
     # 创建保存目录
     os.makedirs(args.save_dir, exist_ok=True)
@@ -242,6 +248,10 @@ def main():
     parser.add_argument('--data_dir', type=str, required=True, help='Path to dataset')
     parser.add_argument('--save_dir', type=str, default='./checkpoints', help='Directory to save checkpoints')
     parser.add_argument('--save_interval', type=int, default=10, help='Save model every n epochs')
+
+    # **新增参数**：是否在训练中启用验证
+    parser.add_argument('--do_validation', action='store_true',
+                        help='Enable validation during training (default: False)')
 
     args = parser.parse_args()
 
